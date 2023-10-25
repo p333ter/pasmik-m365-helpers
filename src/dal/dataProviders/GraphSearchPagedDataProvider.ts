@@ -1,10 +1,12 @@
+import { IAggregationRequest, IFilterRequest, IResultAggregation } from "../../model";
 import { IHttpClient } from "../http/IHttpClient";
 import { IPagedDataProvider } from "./IPagedDataProvider";
+import { IRefinableDataProvider } from "./IRefinableDataProvider";
 
 /**
  * Handles pagination for search queries against MS Graph Search API.
  */
-export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>{
+export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>, IRefinableDataProvider<T>{
     protected query: string;
     protected orderColumn: string;
     protected isDescending: boolean;
@@ -12,6 +14,9 @@ export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>{
     public pageSize: number = 25;
     public allItemsCount: number = -1;
     public graphSearchEndpoint: string = "https://graph.microsoft.com/beta/search/query";
+    protected requestedRefiners: IAggregationRequest[];
+    public queryTemplate?: string;
+    protected filters: IFilterRequest[];
     /**
      * Initialized new instance of GraphSearchPagedDataProvider.
      * @param graphClient IHttpClient implementation supporting Graph API calls.
@@ -19,10 +24,17 @@ export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>{
      * @param selectFields Fields You want to select in the query.
      */
     constructor(protected graphClient: IHttpClient,
-        public entityTypes: ("message" | "event" | "driveItem" | "listItem" | "person")[] = ["listItem"],
+        public entityTypes: ("message" | "event" | "driveItem" | "listItem" | "person" | "chatMessage" | "externalItem")[] = ["listItem"],
         public selectFields: string[] = ["id", "title", "url"]) {
 
     }
+    public setRefiners(aggregator?: IAggregationRequest[]): void {
+        this.requestedRefiners = aggregator || [];
+    }
+    public applyRefiners(filters: IFilterRequest[]): void {
+        this.filters = filters || undefined;
+    }
+    public currentAggregations: IResultAggregation[];
     protected buildSearchRequest() {
         let requestBody = {
             requests: [{
@@ -31,17 +43,26 @@ export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>{
                 to: (this.currentPage + 1) * this.pageSize,
                 query: null,
                 sortProperties: null,
-                fields: null
+                fields: null,
+                aggregations: this.requestedRefiners,
+                aggregationFilters: this.filters?.map(filter => `${filter.field}:${filter.filterValue}`) || undefined,
+                size: this.pageSize
             }]
         };
         if (this.getQuery()) {
             requestBody.requests[0].query = {
-                queryString: this.getQuery()
+                queryString: this.getQuery(),
+            }
+            if(this.queryTemplate){
+                requestBody.requests[0].query.queryTemplate = this.queryTemplate;
             }
         }
         else {
             requestBody.requests[0].query = {
                 queryString: "*"
+            }
+            if(this.queryTemplate){
+                requestBody.requests[0].query.queryTemplate = this.queryTemplate;
             }
         }
         if (this.orderColumn) {
@@ -67,11 +88,16 @@ export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>{
             let responseJson = await searchResponse.json();
             let hitContainer = responseJson.value[0].hitsContainers[0];
             this.allItemsCount = hitContainer.total;
+            this.parseAggregations(hitContainer);
             if (this.allItemsCount > 0) {
                 return hitContainer.hits.map(hit => ({
                     ...hit.resource,
                     type: hit.resource["@odata.type"],
-                    hitResourceIdId: hit.resource.id
+                    hitResourceIdId: hit.resource.id,
+                    hitId: hit.hitId,
+                    hitRank: hit.rank,
+                    hitHighlights: hit.highlights,
+                    hitSummary: hit.summary
                 }));
             }
             return [];
@@ -80,6 +106,22 @@ export class GraphSearchPagedDataProvider<T> implements IPagedDataProvider<T>{
             throw new Error(await searchResponse.text());
         }
     }
+    private parseAggregations(hitContainer: any) {
+        try {
+            this.currentAggregations = hitContainer.aggregations.map(aggregation => ({
+                ...aggregation,
+                buckets: aggregation.buckets.map(bucket => ({
+                    ...bucket,
+                    value: bucket.value,
+                    count: bucket.count
+                }))
+            }));
+        }
+        catch (e) {
+            this.currentAggregations = [];
+        }
+    }
+
     public setQuery(value: string) {
         this.query = value;
     }

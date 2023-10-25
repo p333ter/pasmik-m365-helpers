@@ -1,6 +1,6 @@
 {
   "name": "mgwdev-m365-helpers",
-  "version": "0.0.13",
+  "version": "0.1.9",
   "description": "Helper library to communicate with M365 resources",
   "main": "lib-commonjs/index.js",
   "module": "lib/index.js",
@@ -35,5 +35,7 @@
     "type": "git",
     "url": "https://github.com/mgwojciech/mgwdev-m365-helpers.git"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@azure/msal-browser": "^2.32.2"
+  }
 }
